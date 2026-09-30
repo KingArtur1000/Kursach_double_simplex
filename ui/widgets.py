@@ -2,10 +2,7 @@
 import tkinter as tk
 import customtkinter as ctk
 
-from .theme import (
-    CARD, BORDER, TEXT, MUTED, ACCENT, FONT_MAIN, FONT_BOLD, FONT_MONO,
-    SUCCESS, DANGER, WARNING, PHASE1, PHASE2,
-)
+from .theme import T, FONT_BOLD
 
 
 class Card(ctk.CTkFrame):
@@ -14,59 +11,44 @@ class Card(ctk.CTkFrame):
     def __init__(self, master, title: str = None, **kw):
         super().__init__(
             master,
-            fg_color=CARD,
+            fg_color=T.card,
             corner_radius=14,
             border_width=1,
-            border_color=BORDER,
-            **kw
+            border_color=T.border,
+            **kw,
         )
         if title:
             ctk.CTkLabel(
                 self, text=title,
-                font=FONT_BOLD, text_color=TEXT, anchor="w"
+                font=FONT_BOLD, text_color=T.text, anchor="w",
             ).pack(fill="x", padx=16, pady=(14, 6))
 
 
 class LogPanel(ctk.CTkFrame):
-    """
-    Карточка-журнал с поддержкой масштаба:
-      • Ctrl + колёсико мыши  — плавный зум
-      • Кнопки  − / + / ⟲     — в шапке карточки
-      • Ctrl+= / Ctrl+- / Ctrl+0 — горячие клавиши
-    """
+    """Карточка-журнал с поддержкой масштаба."""
 
     MIN_SIZE = 8
     MAX_SIZE = 26
     DEFAULT_SIZE = 10
 
-    TAG_STYLES = {
-        "header":    (ACCENT,   True),
-        "phase1":    (PHASE1,   True),
-        "phase2":    (PHASE2,   True),
-        "iteration": (WARNING,  False),
-        "info":      (PHASE2,   False),
-        "success":   (SUCCESS,  True),
-        "error":     (DANGER,   True),
-    }
-
     def __init__(self, master, title: str = "Журнал решения", **kw):
         super().__init__(
             master,
-            fg_color=CARD,
+            fg_color=T.card,
             corner_radius=14,
             border_width=1,
-            border_color=BORDER,
-            **kw
+            border_color=T.border,
+            **kw,
         )
         self._font_size = self.DEFAULT_SIZE
 
-        # ─── Шапка с заголовком и кнопками зума ───
+        # ─── Шапка ───
         header = ctk.CTkFrame(self, fg_color="transparent")
         header.pack(fill="x", padx=16, pady=(14, 6))
 
         ctk.CTkLabel(
             header, text=title,
-            font=FONT_BOLD, text_color=TEXT, anchor="w"
+            font=FONT_BOLD, text_color=T.text, anchor="w",
         ).pack(side="left")
 
         controls = ctk.CTkFrame(header, fg_color="transparent")
@@ -75,61 +57,62 @@ class LogPanel(ctk.CTkFrame):
         self.zoom_label = ctk.CTkLabel(
             controls, text="100%",
             font=("Segoe UI", 10),
-            text_color=MUTED, width=42
+            text_color=T.muted, width=42,
         )
         self.zoom_label.pack(side="left", padx=(0, 6))
 
-        self._make_btn(controls, "−", self._zoom_out, tooltip="Уменьшить")
-        self._make_btn(controls, "+", self._zoom_in,  tooltip="Увеличить")
-        self._make_btn(controls, "⟲", self._zoom_reset, tooltip="Сброс (Ctrl+0)")
+        # ⚠️ Заменили ⟲ на ↺ (этот глиф есть в Segoe UI на всех ОС)
+        self._make_btn(controls, "−", self._zoom_out)
+        self._make_btn(controls, "+", self._zoom_in)
+        self._make_btn(controls, "↺", self._zoom_reset)
 
-        # ─── Тело: Text + скроллбар ───
+        # ─── Тело ───
         body = ctk.CTkFrame(self, fg_color="transparent")
         body.pack(fill="both", expand=True, padx=(10, 0), pady=(0, 12))
 
         self.text = tk.Text(
             body, font=("Consolas", self._font_size),
-            wrap="word", bg=CARD, fg=TEXT,
+            wrap="word", bg=T.card, fg=T.text,
             relief="flat", bd=0, highlightthickness=0,
-            padx=14, pady=4, insertbackground=ACCENT,
+            padx=14, pady=4, insertbackground=T.accent,
         )
-        scroll = ctk.CTkScrollbar(body, command=self.text.yview)
+        scroll = ctk.CTkScrollbar(
+            body, command=self.text.yview,
+            button_color=T.entry_btn,
+            button_hover_color=T.accent,
+            fg_color=T.card,
+        )
         self.text.configure(yscrollcommand=scroll.set)
 
         scroll.pack(side="right", fill="y", padx=(0, 10))
         self.text.pack(side="left", fill="both", expand=True, padx=(10, 0))
 
-        # Применяем теги для цветов
         self._apply_tags()
 
-        # ─── Привязки клавиш и колеса мыши ───
-        self.text.bind("<Control-MouseWheel>", self._on_wheel)   # Windows / macOS
-        self.text.bind("<Control-Button-4>",   lambda e: self._zoom_in())   # Linux
-        self.text.bind("<Control-Button-5>",   lambda e: self._zoom_out())  # Linux
+        # Горячие клавиши / колёсико
+        self.text.bind("<Control-MouseWheel>", self._on_wheel)
+        self.text.bind("<Control-Button-4>",   lambda e: self._zoom_in())
+        self.text.bind("<Control-Button-5>",   lambda e: self._zoom_out())
         self.text.bind("<Control-plus>",       lambda e: self._zoom_in())
         self.text.bind("<Control-equal>",      lambda e: self._zoom_in())
         self.text.bind("<Control-minus>",      lambda e: self._zoom_out())
         self.text.bind("<Control-Key-0>",      lambda e: self._zoom_reset())
 
-    # ─── Кнопки ───
-    def _make_btn(self, parent, label, cmd, tooltip=""):
-        b = ctk.CTkButton(
+    def _make_btn(self, parent, label, cmd):
+        return ctk.CTkButton(
             parent, text=label, width=28, height=24,
-            fg_color="transparent", hover_color="#F4F4F5",
-            text_color=MUTED, font=("Segoe UI", 14, "bold"),
+            fg_color="transparent", hover_color=T.hover,
+            text_color=T.muted, font=("Segoe UI", 14, "bold"),
             corner_radius=6, command=cmd,
-        )
-        b.pack(side="left", padx=2)
-        return b
+        ).pack(side="left", padx=2)
 
-    # ─── Логика зума ───
+    # ─── Зум ───
     def _on_wheel(self, event):
-        # delta > 0 — вверх (увеличить), delta < 0 — вниз (уменьшить)
         if event.delta > 0:
             self._zoom_in()
         else:
             self._zoom_out()
-        return "break"  # не пропускаем событие дальше (чтобы не скроллилось)
+        return "break"
 
     def _zoom_in(self):
         self._set_size(self._font_size + 1)
@@ -151,7 +134,16 @@ class LogPanel(ctk.CTkFrame):
         self.zoom_label.configure(text=f"{pct}%")
 
     def _apply_tags(self):
-        for tag, (color, bold) in self.TAG_STYLES.items():
+        styles = {
+            "header":    (T.accent,  True),
+            "phase1":    (T.phase1,  True),
+            "phase2":    (T.phase2,  True),
+            "iteration": (T.warning, False),
+            "info":      (T.phase2,  False),
+            "success":   (T.success, True),
+            "error":     (T.danger,  True),
+        }
+        for tag, (color, bold) in styles.items():
             self.text.tag_config(
                 tag,
                 foreground=color,
@@ -159,7 +151,7 @@ class LogPanel(ctk.CTkFrame):
                      else ("Consolas", self._font_size),
             )
 
-    # ─── Публичный API ───
+    # ─── Public API ───
     def log(self, msg: str, tag: str = None):
         if tag:
             self.text.insert(tk.END, msg + "\n", tag)
@@ -169,7 +161,3 @@ class LogPanel(ctk.CTkFrame):
 
     def clear(self):
         self.text.delete("1.0", tk.END)
-
-    @property
-    def font_size(self) -> int:
-        return self._font_size
