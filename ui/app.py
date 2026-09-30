@@ -109,38 +109,53 @@ class LogisticsApp(ctk.CTk):
 
     # ═══ Переключение темы ═══
     def _toggle_theme(self):
-        # Сохраняем текущие данные
+        # 1. Сохраняем данные
         if self.cost_entries:
             self._saved_data = self._capture()
 
-        # Отменяем активную анимацию кнопки (виджет будет уничтожен)
+        # 2. Отменяем активную pulse-анимацию
         if self._pulse_id:
-            self.after_cancel(self._pulse_id)
+            try:
+                self.after_cancel(self._pulse_id)
+            except Exception:
+                pass
             self._pulse_id = None
 
-        # Меняем режим
+        # 3. Снимаем фокус со всего — иначе Tk попытается вернуть его в
+        #    удалённый виджет и получим TclError про "invalid command name"
+        try:
+            self.focus_set()
+        except tk.TclError:
+            pass
+
+        # 4. Меняем режим
         new_mode = "light" if is_dark() else "dark"
         set_mode(new_mode)
 
-        # Сбрасываем ссылки на уничтожаемые виджеты
+        # 5. Сбрасываем ссылки на уничтожаемые виджеты
         self.cost_entries = []
         self.supply_entries = []
         self.demand_entries = []
         self.canvas = None
 
-        # Сносим весь UI и пересобираем
-        for w in self.winfo_children():
-            w.destroy()
+        # 6. Откладываем пересборку на следующий тик — чтобы текущий клик
+        #    по кнопке успел полностью завершиться до того, как мы снесём UI
+        self.after(10, self._rebuild_after_theme)
 
+    def _rebuild_after_theme(self):
+        # Удаляем весь UI безопасно (обёртка на случай, если что-то уже мертво)
+        for w in self.winfo_children():
+            try:
+                w.destroy()
+            except tk.TclError:
+                pass
+
+        self.configure(fg_color=T.bg)
         self._build_ui()
         self.rebuild_matrix(preserve=False)
 
-        # Обновляем цвет фона окна
-        self.configure(fg_color=T.bg)
-
     # ═══ UI ═══
     def _build_ui(self):
-        # ─── Header с кнопкой переключения темы ───
         header = tk.Frame(self, bg=T.bg)
         header.pack(fill="x", padx=28, pady=(22, 8))
 
@@ -156,7 +171,6 @@ class LogisticsApp(ctk.CTk):
             font=("Segoe UI", 12), text_color=T.muted, fg_color=T.bg,
         ).pack(anchor="w", pady=(2, 0))
 
-        # Тема-тумблер
         self.theme_btn = ctk.CTkButton(
             header,
             text=("☀" if is_dark() else "🌙"),
@@ -168,7 +182,6 @@ class LogisticsApp(ctk.CTk):
         )
         self.theme_btn.pack(side="right", anchor="n")
 
-        # ─── Body ───
         self.body = tk.Frame(self, bg=T.bg)
         self.body.pack(fill="both", expand=True, padx=28, pady=(10, 22))
 
