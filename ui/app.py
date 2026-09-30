@@ -47,12 +47,31 @@ class ScrollFrame(tk.Frame):
         self.inner = tk.Frame(self.canvas, bg=T.card)
         self._win = self.canvas.create_window((0, 0), window=self.inner, anchor="nw")
 
-        self.inner.bind("<Configure>", self._on_inner_configure)
+        self.inner.bind("<Configure>", lambda e: self._sync_scrollregion())
+        self.canvas.bind("<Configure>", lambda e: self._sync_scrollregion())
+
         self.canvas.bind("<Enter>", lambda e: self._bind_wheel(True))
         self.canvas.bind("<Leave>", lambda e: self._bind_wheel(False))
 
-    def _on_inner_configure(self, _event):
-        self.canvas.configure(scrollregion=self.canvas.bbox("all"))
+    # ─── Синхронизация scrollregion с РЕАЛЬНЫМ размером inner ───
+    def _sync_scrollregion(self):
+        # Форсим пересчёт геометрии
+        self.update_idletasks()
+        w = max(self.inner.winfo_reqwidth(), 1)
+        h = max(self.inner.winfo_reqheight(), 1)
+        self.canvas.configure(scrollregion=(0, 0, w, h))
+
+        # Если контент помещается — жёстко ставим вид сверху,
+        # чтобы Tk не оставил «полускролл» из прошлого состояния
+        if h <= self.canvas.winfo_height():
+            self.canvas.yview_moveto(0)
+        if w <= self.canvas.winfo_width():
+            self.canvas.xview_moveto(0)
+
+    # ─── Сброс вью в начало ───
+    def reset_view(self):
+        self.canvas.xview_moveto(0)
+        self.canvas.yview_moveto(0)
 
     def _bind_wheel(self, on):
         if on:
@@ -72,10 +91,14 @@ class ScrollFrame(tk.Frame):
             delta = 1
         else:
             delta = -1 if event.delta > 0 else 1
+
+        # Не скроллим, если некуда
         if shift:
-            self.canvas.xview_scroll(delta, "units")
+            if self.inner.winfo_reqwidth() > self.canvas.winfo_width():
+                self.canvas.xview_scroll(delta, "units")
         else:
-            self.canvas.yview_scroll(delta, "units")
+            if self.inner.winfo_reqheight() > self.canvas.winfo_height():
+                self.canvas.yview_scroll(delta, "units")
 
 
 class LogisticsApp(ctk.CTk):
@@ -109,11 +132,9 @@ class LogisticsApp(ctk.CTk):
 
     # ═══ Переключение темы ═══
     def _toggle_theme(self):
-        # 1. Сохраняем данные
         if self.cost_entries:
             self._saved_data = self._capture()
 
-        # 2. Отменяем активную pulse-анимацию
         if self._pulse_id:
             try:
                 self.after_cancel(self._pulse_id)
@@ -121,29 +142,22 @@ class LogisticsApp(ctk.CTk):
                 pass
             self._pulse_id = None
 
-        # 3. Снимаем фокус со всего — иначе Tk попытается вернуть его в
-        #    удалённый виджет и получим TclError про "invalid command name"
         try:
             self.focus_set()
         except tk.TclError:
             pass
 
-        # 4. Меняем режим
         new_mode = "light" if is_dark() else "dark"
         set_mode(new_mode)
 
-        # 5. Сбрасываем ссылки на уничтожаемые виджеты
         self.cost_entries = []
         self.supply_entries = []
         self.demand_entries = []
         self.canvas = None
 
-        # 6. Откладываем пересборку на следующий тик — чтобы текущий клик
-        #    по кнопке успел полностью завершиться до того, как мы снесём UI
         self.after(10, self._rebuild_after_theme)
 
     def _rebuild_after_theme(self):
-        # Удаляем весь UI безопасно (обёртка на случай, если что-то уже мертво)
         for w in self.winfo_children():
             try:
                 w.destroy()
@@ -342,9 +356,11 @@ class LogisticsApp(ctk.CTk):
             e.grid(row=dr + 1, column=j + 1, padx=3, pady=3)
             self.demand_entries.append(e)
 
-        self.matrix_scroll.canvas.xview_moveto(0)
-        self.matrix_scroll.canvas.yview_moveto(0)
+        # ⚠️ Ключевой момент: сначала ждём, пока Tk пересчитает геометрию
+        #     потом синхронизируем scrollregion и сбрасываем вид
         self.update_idletasks()
+        self.matrix_scroll._sync_scrollregion()
+        self.matrix_scroll.reset_view()
 
     def _make_entry(self):
         return ctk.CTkEntry(
