@@ -61,7 +61,7 @@ class LogPanel(ctk.CTkFrame):
         )
         self.zoom_label.pack(side="left", padx=(0, 6))
 
-        # ⚠️ Заменили ⟲ на ↺ (этот глиф есть в Segoe UI на всех ОС)
+        # Кнопки зума (↺ — глиф, который есть во всех системных шрифтах)
         self._make_btn(controls, "−", self._zoom_out)
         self._make_btn(controls, "+", self._zoom_in)
         self._make_btn(controls, "↺", self._zoom_reset)
@@ -97,6 +97,11 @@ class LogPanel(ctk.CTkFrame):
         self.text.bind("<Control-equal>",      lambda e: self._zoom_in())
         self.text.bind("<Control-minus>",      lambda e: self._zoom_out())
         self.text.bind("<Control-Key-0>",      lambda e: self._zoom_reset())
+
+    # ─── Публичное свойство для сохранения зума при смене темы ───
+    @property
+    def font_size(self) -> int:
+        return self._font_size
 
     def _make_btn(self, parent, label, cmd):
         return ctk.CTkButton(

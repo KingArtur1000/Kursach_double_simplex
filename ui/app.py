@@ -53,22 +53,17 @@ class ScrollFrame(tk.Frame):
         self.canvas.bind("<Enter>", lambda e: self._bind_wheel(True))
         self.canvas.bind("<Leave>", lambda e: self._bind_wheel(False))
 
-    # ─── Синхронизация scrollregion с РЕАЛЬНЫМ размером inner ───
     def _sync_scrollregion(self):
-        # Форсим пересчёт геометрии
         self.update_idletasks()
         w = max(self.inner.winfo_reqwidth(), 1)
         h = max(self.inner.winfo_reqheight(), 1)
         self.canvas.configure(scrollregion=(0, 0, w, h))
 
-        # Если контент помещается — жёстко ставим вид сверху,
-        # чтобы Tk не оставил «полускролл» из прошлого состояния
         if h <= self.canvas.winfo_height():
             self.canvas.yview_moveto(0)
         if w <= self.canvas.winfo_width():
             self.canvas.xview_moveto(0)
 
-    # ─── Сброс вью в начало ───
     def reset_view(self):
         self.canvas.xview_moveto(0)
         self.canvas.yview_moveto(0)
@@ -92,7 +87,6 @@ class ScrollFrame(tk.Frame):
         else:
             delta = -1 if event.delta > 0 else 1
 
-        # Не скроллим, если некуда
         if shift:
             if self.inner.winfo_reqwidth() > self.canvas.winfo_width():
                 self.canvas.xview_scroll(delta, "units")
@@ -118,6 +112,11 @@ class LogisticsApp(ctk.CTk):
         self.canvas = None
         self._pulse_id = None
 
+        # Буфер лога и последний план — для сохранения при смене темы
+        self._log_buffer = []
+        self._last_plan = None
+        self._log_zoom_size = None
+
         self.attributes("-alpha", 0.0)
         self._fade_in_window()
 
@@ -130,10 +129,38 @@ class LogisticsApp(ctk.CTk):
         if alpha < 1.0:
             self.after(15, lambda: self._fade_in_window(alpha))
 
+    # ═══ Логирование через буфер ═══
+    def _emit_log(self, msg, tag=None):
+        """Главный способ писать в журнал: буфер + UI."""
+        self._log_buffer.append((msg, tag))
+        self.after(0, lambda m=msg, t=tag: self._safe_log(m, t))
+
+    def _safe_log(self, msg, tag):
+        try:
+            self.log_panel.log(msg, tag)
+        except tk.TclError:
+            pass
+
+    def _clear_log(self):
+        self._log_buffer.clear()
+        try:
+            self.log_panel.clear()
+        except tk.TclError:
+            pass
+
+    def _replay_log(self):
+        """Перелить буфер в свежий log_panel (после пересборки UI)."""
+        for msg, tag in self._log_buffer:
+            self.log_panel.log(msg, tag)
+
     # ═══ Переключение темы ═══
     def _toggle_theme(self):
         if self.cost_entries:
             self._saved_data = self._capture()
+
+        # Сохраняем размер шрифта журнала
+        if hasattr(self, 'log_panel'):
+            self._log_zoom_size = self.log_panel.font_size
 
         if self._pulse_id:
             try:
@@ -167,6 +194,20 @@ class LogisticsApp(ctk.CTk):
         self.configure(fg_color=T.bg)
         self._build_ui()
         self.rebuild_matrix(preserve=False)
+
+        # Восстанавливаем зум журнала
+        if self._log_zoom_size is not None:
+            try:
+                self.log_panel._set_size(self._log_zoom_size)
+            except Exception:
+                pass
+
+        # Восстанавливаем содержимое журнала
+        self._replay_log()
+
+        # Восстанавливаем график, если было решение
+        if self._last_plan is not None:
+            self._draw_chart(self._last_plan)
 
     # ═══ UI ═══
     def _build_ui(self):
@@ -356,8 +397,6 @@ class LogisticsApp(ctk.CTk):
             e.grid(row=dr + 1, column=j + 1, padx=3, pady=3)
             self.demand_entries.append(e)
 
-        # ⚠️ Ключевой момент: сначала ждём, пока Tk пересчитает геометрию
-        #     потом синхронизируем scrollregion и сбрасываем вид
         self.update_idletasks()
         self.matrix_scroll._sync_scrollregion()
         self.matrix_scroll.reset_view()
@@ -372,6 +411,14 @@ class LogisticsApp(ctk.CTk):
 
     def reset_defaults(self):
         self._saved_data = {'costs': [], 'supply': [], 'demand': []}
+        self._last_plan = None
+        self._clear_log()
+        if self.canvas:
+            try:
+                self.canvas.get_tk_widget().destroy()
+            except Exception:
+                pass
+            self.canvas = None
         self.rebuild_matrix(preserve=False)
 
     # ─── Решение ───
@@ -405,26 +452,29 @@ class LogisticsApp(ctk.CTk):
         self.solve_btn.configure(text="Считаю…", state="disabled")
         self.update_idletasks()
 
+        self._clear_log()
+        self._last_plan = None
+
         def run():
             costs_b, supply_b, demand_b, balanced = balance_task(costs, supply, demand)
             n_s, n_c = costs_b.shape
             c, A_eq, b_eq = build_lp_matrices(costs_b, supply_b, demand_b)
 
-            self.after(0, self.log_panel.clear)
             if balanced:
-                self.after(0, lambda: self.log_panel.log(
+                self._emit_log(
                     f"⚙ Задача была несбалансирована — добавлен фиктивный узел "
-                    f"(размерность: {n_s}×{n_c})", "info"))
+                    f"(размерность: {n_s}×{n_c})", "info")
 
-            result = solve_two_phase_simplex(c, A_eq, b_eq, self.log_panel.log)
+            result = solve_two_phase_simplex(c, A_eq, b_eq, self._emit_log)
 
             if result is None:
-                self.after(0, lambda: self.log_panel.log("\n❌ Решение не найдено.", "error"))
+                self._emit_log("\n❌ Решение не найдено.", "error")
                 self.after(0, self._finish_solve)
                 return
 
             x_opt, z_opt = result
             plan = x_opt.reshape((n_s, n_c))
+            self._last_plan = plan
 
             self.after(0, lambda: self._show_summary(plan, z_opt, supply_b, demand_b))
             self.after(0, lambda: self._draw_chart(plan))
@@ -434,27 +484,27 @@ class LogisticsApp(ctk.CTk):
 
     def _show_summary(self, plan, z_opt, supply_b, demand_b):
         n_s, n_c = plan.shape
-        self.log_panel.log("")
-        self.log_panel.log("╔══════════════════════════════════════════════════════════╗", "header")
-        self.log_panel.log("║              ОПТИМАЛЬНЫЙ ПЛАН ПОСТАВОК                   ║", "header")
-        self.log_panel.log("╚══════════════════════════════════════════════════════════╝", "header")
-        self.log_panel.log(f"z* = {z_opt:.2f} руб.", "success")
-        self.log_panel.log("")
+        self._emit_log("")
+        self._emit_log("╔══════════════════════════════════════════════════════════╗", "header")
+        self._emit_log("║              ОПТИМАЛЬНЫЙ ПЛАН ПОСТАВОК                   ║", "header")
+        self._emit_log("╚══════════════════════════════════════════════════════════╝", "header")
+        self._emit_log(f"z* = {z_opt:.2f} руб.", "success")
+        self._emit_log("")
 
         header_line = "          " + "".join(f"{'П'+str(j+1):>9}" for j in range(n_c))
-        self.log_panel.log(header_line, "info")
+        self._emit_log(header_line, "info")
         for i in range(n_s):
             line = f"Пост.{i+1:<3} " + "".join(
                 f"{int(round(plan[i][j])):>9}" for j in range(n_c))
-            self.log_panel.log(line)
+            self._emit_log(line)
 
-        self.log_panel.log("")
-        self.log_panel.log("Проверка ограничений:", "info")
+        self._emit_log("")
+        self._emit_log("Проверка ограничений:", "info")
         for i in range(n_s):
-            self.log_panel.log(
+            self._emit_log(
                 f"  Отгрузки Пост.{i+1}: {int(round(np.sum(plan[i])))} / запас {int(supply_b[i])}")
         for j in range(n_c):
-            self.log_panel.log(
+            self._emit_log(
                 f"  Поставки П{j+1}: {int(round(np.sum(plan[:, j])))} / спрос {int(demand_b[j])}")
 
     def _finish_solve(self):
@@ -478,5 +528,8 @@ class LogisticsApp(ctk.CTk):
 
     def _draw_chart(self, plan):
         if self.canvas:
-            self.canvas.get_tk_widget().destroy()
+            try:
+                self.canvas.get_tk_widget().destroy()
+            except Exception:
+                pass
         self.canvas = render_chart(self.chart_frame, plan)
