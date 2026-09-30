@@ -1,17 +1,44 @@
+import customtkinter as ctk
 import tkinter as tk
-from tkinter import ttk, messagebox
+from tkinter import messagebox
 import numpy as np
 import matplotlib
 matplotlib.use("TkAgg")
 from matplotlib.figure import Figure
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+import threading
+import time
 
 
-# ============================================================
-#      ДВУХФАЗНЫЙ СИМПЛЕКС-МЕТОД (с логированием)
-# ============================================================
+# ═══════════════════════════════════════════════════════════
+#   ПАЛИТРА И НАСТРОЙКИ
+# ═══════════════════════════════════════════════════════════
+ctk.set_appearance_mode("light")
+ctk.set_default_color_theme("blue")
+
+BG         = "#FAFAFA"
+CARD       = "#FFFFFF"
+BORDER     = "#E4E4E7"
+TEXT       = "#18181B"
+MUTED      = "#71717A"
+ACCENT     = "#6366F1"
+ACCENT_HOV = "#4F46E5"
+SUCCESS    = "#10B981"
+DANGER     = "#EF4444"
+WARNING    = "#F59E0B"
+PHASE1     = "#8B5CF6"
+PHASE2     = "#0EA5E9"
+
+FONT_MAIN  = ("Segoe UI", 11)
+FONT_BOLD  = ("Segoe UI", 11, "bold")
+FONT_TITLE = ("Segoe UI", 18, "bold")
+FONT_MONO  = ("Consolas", 10)
+
+
+# ═══════════════════════════════════════════════════════════
+#   ДВУХФАЗНЫЙ СИМПЛЕКС-МЕТОД
+# ═══════════════════════════════════════════════════════════
 def simplex_iterations(A, b, c, basis, log, phase, max_iter=500):
-    """Двухфазный симплекс. A: m×n, b: m, c: n, basis: m индексов."""
     m, n = A.shape
     A = A.astype(float).copy()
     b = b.astype(float).copy()
@@ -25,30 +52,24 @@ def simplex_iterations(A, b, c, basis, log, phase, max_iter=500):
             log("  ⚠ Вырожденный базис — прерывание.", "error")
             return False, basis, None
 
-        # ⚠ КЛЮЧЕВОЕ ИСПРАВЛЕНИЕ: x_B = B⁻¹·b, именно его используем в ratio test
         x_B = B_inv @ b
         c_B = c[basis]
         z = c_B @ x_B
-
         y = c_B @ B_inv
         reduced = c - y @ A
-
         non_basic = [j for j in range(n) if j not in basis]
 
-        # ---- Лог ----
-        log(f"\n  ┌── Итерация {iteration} (фаза {phase}) ──────────────────", "iteration")
+        log(f"\n  ┌── Итерация {iteration} (фаза {phase}) ──────────────", "iteration")
         log("  │ Базис: " + ", ".join(f"x{basis[i]+1}" for i in range(m)))
-        log("  │ Текущее решение: " +
-            ", ".join(f"x{basis[i]+1}={x_B[i]:.3f}" for i in range(m)))
-        log(f"  │ Значение z = {z:.6f}")
+        log("  │ Решение: " + ", ".join(f"x{basis[i]+1}={x_B[i]:.3f}" for i in range(m)))
+        log(f"  │ z = {z:.6f}")
         if non_basic:
             shown = non_basic[:12]
             rc_str = ", ".join(f"Δ{j+1}={reduced[j]:+.4f}" for j in shown)
             if len(non_basic) > 12:
                 rc_str += ", ..."
-            log("  │ Приведённые оценки: " + rc_str)
+            log("  │ Оценки: " + rc_str)
 
-        # ---- Оптимальность ----
         entering = None
         min_rc = -1e-9
         for j in non_basic:
@@ -57,48 +78,37 @@ def simplex_iterations(A, b, c, basis, log, phase, max_iter=500):
                 entering = j
 
         if entering is None:
-            log("  │ ✓ Все приведённые оценки ≥ 0 → ОПТИМУМ", "success")
-            log("  └──────────────────────────────────────────────", "iteration")
+            log("  │ ✓ Все Δ ≥ 0 → ОПТИМУМ", "success")
+            log("  └──────────────────────────────────────", "iteration")
             return True, basis, z
 
-        log(f"  │ → Вводим в базис x{entering+1} (Δ = {reduced[entering]:.4f})", "info")
-
-        # ---- Направление ----
+        log(f"  │ → Вводим x{entering+1} (Δ={reduced[entering]:.4f})", "info")
         d = B_inv @ A[:, entering]
-
-        # ⚠ Ratio test использует x_B, а не b!
-        ratios = []
-        for i in range(m):
-            if d[i] > 1e-9:
-                ratios.append((x_B[i] / d[i], i))
+        ratios = [(x_B[i] / d[i], i) for i in range(m) if d[i] > 1e-9]
 
         if not ratios:
             log("  │ ✗ Задача неограничена", "error")
-            log("  └──────────────────────────────────────────────", "iteration")
+            log("  └──────────────────────────────────────", "iteration")
             return False, basis, None
 
         min_ratio, leaving_idx = min(ratios)
         leaving = basis[leaving_idx]
-        log(f"  │ → Выводим из базиса x{leaving+1} (min отн. = {min_ratio:.4f})", "info")
-        log("  └──────────────────────────────────────────────", "iteration")
+        log(f"  │ → Выводим x{leaving+1} (min отн. = {min_ratio:.4f})", "info")
+        log("  └──────────────────────────────────────", "iteration")
 
         basis[leaving_idx] = entering
 
-    log(f"  ⚠ Достигнут лимит итераций ({max_iter})", "error")
+    log(f"  ⚠ Лимит итераций ({max_iter})", "error")
     return False, basis, None
 
 
 def solve_two_phase_simplex(c_orig, A_eq, b_eq, log):
-    """Двухфазный симплекс с корректным переходом к Фазе 2."""
     m, n = A_eq.shape
     A = A_eq.astype(float).copy()
     b = b_eq.astype(float).copy()
-
-    # Приводим b к неотрицательным
     for i in range(m):
         if b[i] < 0:
-            A[i] = -A[i]
-            b[i] = -b[i]
+            A[i] = -A[i]; b[i] = -b[i]
 
     log("╔══════════════════════════════════════════════════════════╗", "header")
     log("║          ДВУХФАЗНЫЙ СИМПЛЕКС-МЕТОД                       ║", "header")
@@ -109,303 +119,325 @@ def solve_two_phase_simplex(c_orig, A_eq, b_eq, log):
         " + ".join(f"{c_orig[j]:.2f}·x{j+1}" for j in range(n)))
     log("")
 
-    # ================== ФАЗА 1 ==================
-    log("─" * 60, "phase")
-    log("ФАЗА 1. Поиск начального допустимого базисного решения", "phase")
-    log("─" * 60, "phase")
-    log("Добавляем искусственные переменные a1..am (по одной на каждое")
-    log("ограничение). Решаем вспомогательную задачу: min W = Σ ai")
-    log("")
+    # ----- ФАЗА 1 -----
+    log("─" * 60, "phase1")
+    log("ФАЗА 1. Поиск начального допустимого базисного решения", "phase1")
+    log("─" * 60, "phase1")
 
     A1 = np.hstack([A, np.eye(m)])
     c1 = np.concatenate([np.zeros(n), np.ones(m)])
     basis = list(range(n, n + m))
 
     success, basis, z1 = simplex_iterations(A1, b, c1, basis, log, phase=1)
-
-    if not success:
-        log("\n❌ Фаза 1 не сошлась", "error")
+    if not success or z1 > 1e-6:
+        log(f"\n❌ Фаза 1 не сошлась (W={z1:.6f})", "error")
         return None
 
-    log("")
-    log(f"Минимум Фазы 1: W = {z1:.6f}", "info")
-    if z1 > 1e-6:
-        log("❌ W > 0 ⇒ исходная задача не имеет допустимых решений.", "error")
-        return None
-    log("✅ W = 0 ⇒ найдено начальное допустимое базисное решение.", "success")
+    log(f"\n✅ W = {z1:.6f} ⇒ допустимый базис найден.", "success")
 
-    # ============================================================
-    # ПРИНУДИТЕЛЬНЫЙ ВЫВОД ИСКУССТВЕННЫХ ИЗ БАЗИСА
-    # ============================================================
-    log("")
-    log("Выводим искусственные переменные из базиса (если остались):", "info")
-
-    redundant_rows = []
+    # Вывод искусственных из базиса
+    redundant = []
     for idx in range(m):
-        if basis[idx] >= n:  # в базисе сидит искусственная
+        if basis[idx] >= n:
             B = A1[:, basis]
             try:
                 B_inv = np.linalg.inv(B)
             except np.linalg.LinAlgError:
-                redundant_rows.append(idx)
-                log(f"  ⚠ Строка {idx+1}: базис вырожден, "
-                    f"искусственная x{basis[idx]+1} отброшена", "info")
-                continue
+                redundant.append(idx); continue
             row = B_inv[idx, :] @ A1
             swapped = False
             for j in range(n):
                 if j not in basis and abs(row[j]) > 1e-9:
-                    basis[idx] = j
-                    swapped = True
-                    break
+                    basis[idx] = j; swapped = True; break
             if not swapped:
-                redundant_rows.append(idx)
-                log(f"  ⚠ Строка {idx+1} избыточна: искусственная "
-                    f"x{basis[idx]+1} = 0, ограничение линейно-зависимо", "info")
+                redundant.append(idx)
 
-    if not redundant_rows:
-        log("  ✓ Искусственные успешно выведены — все строки независимы", "success")
-
-    # Оставляем только независимые строки
-    keep = [i for i in range(m) if i not in redundant_rows]
+    keep = [i for i in range(m) if i not in redundant]
     A_red = A[keep, :]
     b_red = b[keep]
     basis_red = [basis[i] for i in keep]
 
-    # ================== ФАЗА 2 ==================
+    # ----- ФАЗА 2 -----
     log("")
-    log("─" * 60, "phase")
-    log("ФАЗА 2. Оптимизация исходной целевой функции", "phase")
-    log("─" * 60, "phase")
-    log(f"Работаем только с исходными {n} переменными. Столбцы")
-    log(f"искусственных переменных отброшены.")
-    log(f"Активных ограничений: {len(keep)}  "
-        f"(отброшено избыточных: {len(redundant_rows)})")
-    log("")
+    log("─" * 60, "phase2")
+    log("ФАЗА 2. Оптимизация исходной целевой функции", "phase2")
+    log("─" * 60, "phase2")
 
-    # ✅ Отрезаем только первые n столбцов — искусственные больше не помешают
     success, basis_final, z2 = simplex_iterations(
         A_red, b_red, c_orig.astype(float).copy(), basis_red, log, phase=2
     )
-
     if not success:
-        log("\n❌ Фаза 2 не сошлась", "error")
         return None
 
-    log("")
-    log(f"✅ ОПТИМАЛЬНОЕ ЗНАЧЕНИЕ: z* = {z2:.6f}", "success")
+    log(f"\n✅ ОПТИМУМ: z* = {z2:.6f}", "success")
 
-    # Извлекаем решение по исходным переменным
     B = A_red[:, basis_final]
     x_B = np.linalg.solve(B, b_red)
     x = np.zeros(n)
     for i, b_idx in enumerate(basis_final):
         x[b_idx] = x_B[i]
-
     return x, z2
 
 
-# ============================================================
-#                  ГРАФИЧЕСКОЕ ПРИЛОЖЕНИЕ
-# ============================================================
-class LogisticsApp:
-    def __init__(self, root):
-        self.root = root
-        self.root.title("Логистический модуль цепочек поставок микросхем")
-        self.root.geometry("1280x800")
-        self.root.configure(bg="#f0f0f0")
+# ═══════════════════════════════════════════════════════════
+#   КАРТОЧКА (скруглённый контейнер)
+# ═══════════════════════════════════════════════════════════
+class Card(ctk.CTkFrame):
+    def __init__(self, master, title=None, **kw):
+        super().__init__(master,
+                         fg_color=CARD,
+                         corner_radius=14,
+                         border_width=1,
+                         border_color=BORDER,
+                         **kw)
+        if title:
+            ctk.CTkLabel(self, text=title,
+                         font=FONT_BOLD,
+                         text_color=TEXT,
+                         anchor="w").pack(fill="x", padx=16, pady=(14, 6))
 
+
+# ═══════════════════════════════════════════════════════════
+#   ГЛАВНОЕ ПРИЛОЖЕНИЕ
+# ═══════════════════════════════════════════════════════════
+class LogisticsApp(ctk.CTk):
+    def __init__(self):
+        super().__init__()
+        self.title("Логистический модуль · Микросхемы")
+        self.geometry("1400x880")
+        self.minsize(1100, 700)
+        self.configure(fg_color=BG)
+
+        # Данные
         self.num_suppliers = 3
         self.num_consumers = 3
         self.cost_entries = []
         self.supply_entries = []
         self.demand_entries = []
-
-        # Сохранение прошлых значений
-        self._saved_data = {
-            'costs': [],
-            'supply': [],
-            'demand': []
-        }
-
-        self.build_ui()
-
-    # ---------- UI ----------
-    def build_ui(self):
-        header = tk.Label(
-            self.root,
-            text="Проектирование логистического модуля цепочек поставок микросхем\n"
-                 "(на основе двухфазного симплекс-метода)",
-            font=("Arial", 14, "bold"),
-            bg="#f0f0f0", fg="#2c3e50", justify="center"
-        )
-        header.pack(pady=10)
-
-        main_frame = tk.Frame(self.root, bg="#f0f0f0")
-        main_frame.pack(fill="both", expand=True, padx=10, pady=5)
-
-        # ---- Левая часть: ввод ----
-        left_frame = tk.LabelFrame(main_frame, text=" Входные данные ",
-                                    font=("Arial", 11, "bold"),
-                                    bg="#f0f0f0", fg="#2c3e50",
-                                    padx=10, pady=10)
-        left_frame.pack(side="left", fill="y", padx=5)
-
-        dim_frame = tk.Frame(left_frame, bg="#f0f0f0")
-        dim_frame.pack(fill="x", pady=5)
-
-        tk.Label(dim_frame, text="Поставщиков:", bg="#f0f0f0").pack(side="left")
-        self.supplier_spin = tk.Spinbox(dim_frame, from_=2, to=6, width=3,
-                                         command=self.rebuild_matrix)
-        self.supplier_spin.pack(side="left", padx=5)
-
-        tk.Label(dim_frame, text="Потребителей:", bg="#f0f0f0").pack(side="left")
-        self.consumer_spin = tk.Spinbox(dim_frame, from_=2, to=6, width=3,
-                                         command=self.rebuild_matrix)
-        self.consumer_spin.pack(side="left", padx=5)
-
-        self.matrix_container = tk.Frame(left_frame, bg="#f0f0f0")
-        self.matrix_container.pack(fill="both", expand=True, pady=10)
-
-        solve_btn = tk.Button(left_frame, text="🚀 Решить задачу",
-                               font=("Arial", 12, "bold"),
-                               bg="#27ae60", fg="white",
-                               activebackground="#229954",
-                               cursor="hand2",
-                               command=self.solve)
-        solve_btn.pack(fill="x", pady=10)
-
-        reset_btn = tk.Button(left_frame, text="🔄 Сбросить значения",
-                               font=("Arial", 10),
-                               bg="#e74c3c", fg="white",
-                               activebackground="#c0392b",
-                               cursor="hand2",
-                               command=self.reset_defaults)
-        reset_btn.pack(fill="x")
-
-        # ---- Правая часть: результат ----
-        right_frame = tk.LabelFrame(main_frame, text=" Результат ",
-                                     font=("Arial", 11, "bold"),
-                                     bg="#f0f0f0", fg="#2c3e50",
-                                     padx=10, pady=10)
-        right_frame.pack(side="right", fill="both", expand=True, padx=5)
-
-        # Верх: лог
-        log_frame = tk.Frame(right_frame)
-        log_frame.pack(fill="both", expand=True)
-
-        self.log_text = tk.Text(log_frame, height=20, width=70,
-                                 font=("Consolas", 9),
-                                 bg="#fbfbfb", fg="#2c3e50",
-                                 insertbackground="#2c3e50",
-                                 wrap="word")
-        scrollbar = tk.Scrollbar(log_frame, command=self.log_text.yview)
-        self.log_text.config(yscrollcommand=scrollbar.set)
-
-        self.log_text.pack(side="left", fill="both", expand=True)
-        scrollbar.pack(side="right", fill="y")
-
-        # Цветовые теги для логов
-        self.log_text.tag_config("header", foreground="#1a5490",
-                                  font=("Consolas", 10, "bold"))
-        self.log_text.tag_config("phase", foreground="#8e44ad",
-                                  font=("Consolas", 9, "bold"))
-        self.log_text.tag_config("iteration", foreground="#d35400")
-        self.log_text.tag_config("info", foreground="#2980b9")
-        self.log_text.tag_config("success", foreground="#27ae60",
-                                  font=("Consolas", 9, "bold"))
-        self.log_text.tag_config("error", foreground="#c0392b",
-                                  font=("Consolas", 9, "bold"))
-
-        # Низ: график
-        self.chart_frame = tk.Frame(right_frame, bg="#f0f0f0")
-        self.chart_frame.pack(fill="both", expand=True, pady=5)
+        self._saved_data = {'costs': [], 'supply': [], 'demand': []}
         self.canvas = None
+        self._pulse_id = None
+        self._pulse_state = False
 
+        # Плавное появление окна
+        self.attributes("-alpha", 0.0)
+        self._fade_in_window()
+
+        self._build_ui()
         self.rebuild_matrix(preserve=False)
 
-    # ---------- Работа с матрицей ----------
-    def _capture_values(self):
-        data = {
+    # ─── Fade-in окна ───
+    def _fade_in_window(self, alpha=0.0):
+        alpha = min(1.0, alpha + 0.08)
+        self.attributes("-alpha", alpha)
+        if alpha < 1.0:
+            self.after(15, lambda: self._fade_in_window(alpha))
+
+    # ─── UI ───
+    def _build_ui(self):
+        # ----- Заголовок -----
+        header = ctk.CTkFrame(self, fg_color="transparent")
+        header.pack(fill="x", padx=28, pady=(22, 8))
+
+        ctk.CTkLabel(header, text="Логистика цепочек поставок",
+                     font=("Segoe UI", 24, "bold"),
+                     text_color=TEXT).pack(anchor="w")
+        ctk.CTkLabel(header,
+                     text="Проектирование логистического модуля микросхем · двухфазный симплекс-метод",
+                     font=("Segoe UI", 12),
+                     text_color=MUTED).pack(anchor="w", pady=(2, 0))
+
+        # ----- Основной контейнер: 2 колонки -----
+        body = ctk.CTkFrame(self, fg_color="transparent")
+        body.pack(fill="both", expand=True, padx=28, pady=(10, 22))
+        body.grid_columnconfigure(0, weight=0, minsize=380)
+        body.grid_columnconfigure(1, weight=1)
+        body.grid_rowconfigure(0, weight=1)
+
+        # ═══ ЛЕВАЯ КОЛОНКА: ВВОД ═══
+        left = Card(body, title="Параметры задачи")
+        left.grid(row=0, column=0, sticky="nsew", padx=(0, 12))
+
+        # Размерность
+        dim = ctk.CTkFrame(left, fg_color="transparent")
+        dim.pack(fill="x", padx=16, pady=(4, 12))
+
+        ctk.CTkLabel(dim, text="Поставщиков", font=FONT_MAIN,
+                     text_color=MUTED).pack(side="left")
+        self.supplier_spin = ctk.CTkOptionMenu(
+            dim, values=[str(i) for i in range(2, 7)], width=60,
+            fg_color="#F4F4F5", button_color="#E4E4E7",
+            button_hover_color=ACCENT, text_color=TEXT,
+            dropdown_fg_color=CARD, dropdown_text_color=TEXT,
+            dropdown_hover_color="#F4F4F5", font=FONT_MAIN,
+            command=lambda _: self.rebuild_matrix())
+        self.supplier_spin.set("3")
+        self.supplier_spin.pack(side="left", padx=(8, 20))
+
+        ctk.CTkLabel(dim, text="Потребителей", font=FONT_MAIN,
+                     text_color=MUTED).pack(side="left")
+        self.consumer_spin = ctk.CTkOptionMenu(
+            dim, values=[str(i) for i in range(2, 7)], width=60,
+            fg_color="#F4F4F5", button_color="#E4E4E7",
+            button_hover_color=ACCENT, text_color=TEXT,
+            dropdown_fg_color=CARD, dropdown_text_color=TEXT,
+            dropdown_hover_color="#F4F4F5", font=FONT_MAIN,
+            command=lambda _: self.rebuild_matrix())
+        self.consumer_spin.set("3")
+        self.consumer_spin.pack(side="left", padx=8)
+
+        # Матрица (динамическая)
+        self.matrix_container = ctk.CTkFrame(left, fg_color="transparent")
+        self.matrix_container.pack(fill="x", padx=16, pady=(0, 12))
+
+        # Кнопки
+        btn_frame = ctk.CTkFrame(left, fg_color="transparent")
+        btn_frame.pack(fill="x", padx=16, pady=(4, 16), side="bottom")
+
+        self.solve_btn = ctk.CTkButton(
+            btn_frame, text="Решить задачу",
+            font=("Segoe UI", 13, "bold"),
+            fg_color=ACCENT, hover_color=ACCENT_HOV,
+            text_color="white", corner_radius=10, height=44,
+            command=self.solve
+        )
+        self.solve_btn.pack(fill="x", pady=(0, 8))
+
+        ctk.CTkButton(
+            btn_frame, text="Сбросить",
+            font=FONT_MAIN,
+            fg_color="transparent", hover_color="#F4F4F5",
+            text_color=MUTED, border_width=1, border_color=BORDER,
+            corner_radius=10, height=38,
+            command=self.reset_defaults
+        ).pack(fill="x")
+
+        # ═══ ПРАВАЯ КОЛОНКА: РЕЗУЛЬТАТ ═══
+        right = ctk.CTkFrame(body, fg_color="transparent")
+        right.grid(row=0, column=1, sticky="nsew")
+        right.grid_rowconfigure(0, weight=3)
+        right.grid_rowconfigure(1, weight=2)
+        right.grid_columnconfigure(0, weight=1)
+
+        # Лог
+        log_card = Card(right, title="Журнал решения")
+        log_card.grid(row=0, column=0, sticky="nsew", pady=(0, 12))
+
+        self.log_text = tk.Text(
+            log_card, font=FONT_MONO, wrap="word",
+            bg=CARD, fg=TEXT, relief="flat", bd=0,
+            highlightthickness=0, padx=14, pady=4,
+            insertbackground=ACCENT
+        )
+        log_scroll = ctk.CTkScrollbar(log_card, command=self.log_text.yview)
+        self.log_text.configure(yscrollcommand=log_scroll.set)
+        log_scroll.pack(side="right", fill="y", padx=(0, 10), pady=(0, 12))
+        self.log_text.pack(side="left", fill="both", expand=True, padx=(10, 0), pady=(0, 12))
+
+        self.log_text.tag_config("header",  foreground=ACCENT,  font=("Consolas", 10, "bold"))
+        self.log_text.tag_config("phase1",  foreground=PHASE1,  font=("Consolas", 10, "bold"))
+        self.log_text.tag_config("phase2",  foreground=PHASE2,  font=("Consolas", 10, "bold"))
+        self.log_text.tag_config("iteration", foreground=WARNING)
+        self.log_text.tag_config("info",    foreground=PHASE2)
+        self.log_text.tag_config("success", foreground=SUCCESS, font=("Consolas", 10, "bold"))
+        self.log_text.tag_config("error",   foreground=DANGER,  font=("Consolas", 10, "bold"))
+
+        # График
+        self.chart_card = Card(right, title="Карта оптимальных поставок")
+        self.chart_card.grid(row=1, column=0, sticky="nsew")
+        self.chart_frame = ctk.CTkFrame(self.chart_card, fg_color="transparent")
+        self.chart_frame.pack(fill="both", expand=True, padx=10, pady=(0, 10))
+
+    # ─── Матрица ───
+    def _capture(self):
+        return {
             'costs': [[e.get() for e in row] for row in self.cost_entries],
             'supply': [e.get() for e in self.supply_entries],
             'demand': [e.get() for e in self.demand_entries],
         }
-        return data
 
     def rebuild_matrix(self, preserve=True):
-        # Считываем старые значения
         if preserve and self.cost_entries:
-            self._saved_data = self._capture_values()
+            self._saved_data = self._capture()
 
         for w in self.matrix_container.winfo_children():
             w.destroy()
 
         self.num_suppliers = int(self.supplier_spin.get())
         self.num_consumers = int(self.consumer_spin.get())
+        self.cost_entries, self.supply_entries, self.demand_entries = [], [], []
 
-        self.cost_entries = []
-        self.supply_entries = []
-        self.demand_entries = []
+        # Заголовок
+        ctk.CTkLabel(self.matrix_container, text="Матрица затрат",
+                     font=FONT_BOLD, text_color=TEXT, anchor="w").grid(
+            row=0, column=0, columnspan=self.num_consumers + 2,
+            sticky="w", pady=(0, 6))
 
-        tk.Label(self.matrix_container, text="Матрица затрат на перевозку:",
-                 font=("Arial", 10, "bold"), bg="#f0f0f0").grid(
-            row=0, column=0, columnspan=self.num_consumers + 2, pady=5, sticky="w")
-
-        tk.Label(self.matrix_container, text="", bg="#f0f0f0", width=10).grid(row=1, column=0)
+        # Шапка
+        ctk.CTkLabel(self.matrix_container, text="", width=60).grid(row=1, column=0)
         for j in range(self.num_consumers):
-            tk.Label(self.matrix_container, text=f"Потр.{j+1}",
-                     font=("Arial", 9, "bold"), bg="#f0f0f0").grid(row=1, column=j + 1)
+            ctk.CTkLabel(self.matrix_container, text=f"П{j+1}",
+                         font=FONT_BOLD, text_color=MUTED, width=60).grid(
+                row=1, column=j + 1, padx=3, pady=(0, 4))
 
-        old_costs = self._saved_data.get('costs', [])
+        # Строки
+        old = self._saved_data.get('costs', [])
         for i in range(self.num_suppliers):
-            tk.Label(self.matrix_container, text=f"Пост.{i+1}",
-                     font=("Arial", 9, "bold"), bg="#f0f0f0").grid(row=i + 2, column=0)
-            row_entries = []
+            ctk.CTkLabel(self.matrix_container, text=f"Пост.{i+1}",
+                         font=FONT_MAIN, text_color=MUTED, width=60).grid(
+                row=i + 2, column=0, sticky="w")
+            row_e = []
             for j in range(self.num_consumers):
-                e = tk.Entry(self.matrix_container, width=6, justify="center")
-                # Восстанавливаем или ставим дефолт
-                if i < len(old_costs) and j < len(old_costs[i]):
-                    val = old_costs[i][j]
-                else:
-                    val = str((i + 1) * 10 + j * 5)
+                e = ctk.CTkEntry(self.matrix_container, width=60, height=30,
+                                 corner_radius=8,
+                                 fg_color="#F4F4F5", border_width=0,
+                                 text_color=TEXT, justify="center",
+                                 font=FONT_MAIN)
+                val = old[i][j] if (i < len(old) and j < len(old[i])) else str((i + 1) * 10 + j * 5)
                 e.insert(0, val)
-                e.grid(row=i + 2, column=j + 1, padx=2, pady=2)
-                row_entries.append(e)
-            self.cost_entries.append(row_entries)
+                e.grid(row=i + 2, column=j + 1, padx=3, pady=3)
+                row_e.append(e)
+            self.cost_entries.append(row_e)
 
         # Запасы
-        supply_row = self.num_suppliers + 3
-        tk.Label(self.matrix_container, text="Запасы:",
-                 font=("Arial", 10, "bold"), bg="#f0f0f0").grid(
-            row=supply_row, column=0, pady=5, sticky="w")
-        old_supply = self._saved_data.get('supply', [])
+        sr = self.num_suppliers + 3
+        ctk.CTkLabel(self.matrix_container, text="Запасы",
+                     font=FONT_BOLD, text_color=TEXT, anchor="w").grid(
+            row=sr, column=0, columnspan=self.num_consumers + 2,
+            sticky="w", pady=(10, 4))
+        old_s = self._saved_data.get('supply', [])
         for i in range(self.num_suppliers):
-            e = tk.Entry(self.matrix_container, width=6, justify="center")
-            val = old_supply[i] if i < len(old_supply) else "100"
-            e.insert(0, val)
-            e.grid(row=supply_row, column=i + 1, padx=2, pady=2)
+            e = ctk.CTkEntry(self.matrix_container, width=60, height=30,
+                             corner_radius=8, fg_color="#F4F4F5",
+                             border_width=0, text_color=TEXT,
+                             justify="center", font=FONT_MAIN)
+            e.insert(0, old_s[i] if i < len(old_s) else "100")
+            e.grid(row=sr + 1 + i // self.num_consumers,
+                   column=1 + (i % self.num_consumers),
+                   padx=3, pady=3)
             self.supply_entries.append(e)
 
         # Спрос
-        demand_row = supply_row + 1
-        tk.Label(self.matrix_container, text="Спрос:",
-                 font=("Arial", 10, "bold"), bg="#f0f0f0").grid(
-            row=demand_row, column=0, pady=5, sticky="w")
-        old_demand = self._saved_data.get('demand', [])
+        dr = sr + 2 + (self.num_suppliers - 1) // self.num_consumers
+        ctk.CTkLabel(self.matrix_container, text="Спрос",
+                     font=FONT_BOLD, text_color=TEXT, anchor="w").grid(
+            row=dr, column=0, columnspan=self.num_consumers + 2,
+            sticky="w", pady=(10, 4))
+        old_d = self._saved_data.get('demand', [])
         for j in range(self.num_consumers):
-            e = tk.Entry(self.matrix_container, width=6, justify="center")
-            val = old_demand[j] if j < len(old_demand) else "100"
-            e.insert(0, val)
-            e.grid(row=demand_row, column=j + 1, padx=2, pady=2)
+            e = ctk.CTkEntry(self.matrix_container, width=60, height=30,
+                             corner_radius=8, fg_color="#F4F4F5",
+                             border_width=0, text_color=TEXT,
+                             justify="center", font=FONT_MAIN)
+            e.insert(0, old_d[j] if j < len(old_d) else "100")
+            e.grid(row=dr + 1, column=j + 1, padx=3, pady=3)
             self.demand_entries.append(e)
 
     def reset_defaults(self):
-        # Полный сброс
         self._saved_data = {'costs': [], 'supply': [], 'demand': []}
         self.rebuild_matrix(preserve=False)
 
-    # ---------- Логирование ----------
+    # ─── Лог ───
     def clear_log(self):
         self.log_text.delete("1.0", tk.END)
 
@@ -415,11 +447,9 @@ class LogisticsApp:
         else:
             self.log_text.insert(tk.END, msg + "\n")
         self.log_text.see(tk.END)
-        self.root.update_idletasks()
 
-    # ---------- Решение ----------
+    # ─── Решение ───
     def solve(self):
-        self.clear_log()
         try:
             costs = np.array([[float(self.cost_entries[i][j].get())
                                 for j in range(self.num_consumers)]
@@ -430,109 +460,139 @@ class LogisticsApp:
             messagebox.showerror("Ошибка ввода", f"Проверьте данные: {ex}")
             return
 
-        n_s = len(supply)
-        n_c = len(demand)
+        # Анимация кнопки
+        self.solve_btn.configure(text="Считаю…", state="disabled")
+        self.update_idletasks()
 
-        # Балансировка
-        if abs(np.sum(supply) - np.sum(demand)) > 1e-6:
-            if not messagebox.askyesno(
-                    "Несбалансированная задача",
-                    f"Σ запасов ({np.sum(supply):.0f}) ≠ Σ спроса ({np.sum(demand):.0f}).\n\n"
-                    f"Добавить фиктивного поставщика/потребителя?"):
-                return
-            if np.sum(supply) > np.sum(demand):
-                diff = np.sum(supply) - np.sum(demand)
-                demand = np.append(demand, diff)
-                costs = np.hstack([costs, np.zeros((n_s, 1))])
-                self.log(f"⚙ Добавлен фиктивный потребитель со спросом {diff:.0f}",
-                         "info")
-                n_c += 1
+        def run():
+            n_s, n_c = len(supply), len(demand)
+
+             # Инициализация на случай, если задача сбалансирована
+            supply_, demand_, costs_ = supply, demand, costs
+
+            # Балансировка
+            if abs(np.sum(supply) - np.sum(demand)) > 1e-6:
+                if np.sum(supply) > np.sum(demand):
+                    diff = np.sum(supply) - np.sum(demand)
+                    demand_ = np.append(demand, diff)
+                    costs_ = np.hstack([costs, np.zeros((n_s, 1))])
+                    n_c += 1
+                else:
+                    diff = np.sum(demand) - np.sum(supply)
+                    supply_ = np.append(supply, diff)
+                    costs_ = np.vstack([costs, np.zeros((1, n_c))])
+                    n_s += 1
             else:
-                diff = np.sum(demand) - np.sum(supply)
-                supply = np.append(supply, diff)
-                costs = np.vstack([costs, np.zeros((1, n_c))])
-                self.log(f"⚙ Добавлен фиктивный поставщик с запасом {diff:.0f}",
-                         "info")
-                n_s += 1
+                supply_, demand_, costs_ = supply, demand, costs
 
-        # Формулировка задачи ЛП
-        c = costs.flatten()
-        A_eq = []
-        b_eq = []
-        for i in range(n_s):
-            row = np.zeros(n_s * n_c)
-            for j in range(n_c):
-                row[i * n_c + j] = 1
-            A_eq.append(row)
-            b_eq.append(supply[i])
-        for j in range(n_c):
-            row = np.zeros(n_s * n_c)
+            c = costs_.flatten()
+            A_eq, b_eq = [], []
             for i in range(n_s):
-                row[i * n_c + j] = 1
-            A_eq.append(row)
-            b_eq.append(demand[j])
-        A_eq = np.array(A_eq)
-        b_eq = np.array(b_eq)
+                row = np.zeros(n_s * n_c)
+                for j in range(n_c):
+                    row[i * n_c + j] = 1
+                A_eq.append(row); b_eq.append(supply_[i])
+            for j in range(n_c):
+                row = np.zeros(n_s * n_c)
+                for i in range(n_s):
+                    row[i * n_c + j] = 1
+                A_eq.append(row); b_eq.append(demand_[j])
+            A_eq = np.array(A_eq); b_eq = np.array(b_eq)
 
-        # Запуск решения
-        result = solve_two_phase_simplex(c, A_eq, b_eq, self.log)
+            self.clear_log()
+            result = solve_two_phase_simplex(c, A_eq, b_eq, self.log)
 
-        if result is None:
-            self.log("\n❌ Решение не найдено.", "error")
+            if result is None:
+                self.log("\n❌ Решение не найдено.", "error")
+                self.after(0, self._finish_solve)
+                return
+
+            x_opt, z_opt = result
+            plan = x_opt.reshape((n_s, n_c))
+
+            self.log("")
+            self.log("╔══════════════════════════════════════════════════════════╗", "header")
+            self.log("║              ОПТИМАЛЬНЫЙ ПЛАН ПОСТАВОК                   ║", "header")
+            self.log("╚══════════════════════════════════════════════════════════╝", "header")
+            self.log(f"z* = {z_opt:.2f} руб.", "success")
+            self.log("")
+
+            header_line = "          " + "".join(f"{'П'+str(j+1):>9}" for j in range(n_c))
+            self.log(header_line, "info")
+            for i in range(n_s):
+                line = f"Пост.{i+1:<3} " + "".join(
+                    f"{int(round(plan[i][j])):>9}" for j in range(n_c))
+                self.log(line)
+
+            self.log("")
+            self.log("Проверка ограничений:", "info")
+            for i in range(n_s):
+                self.log(f"  Отгрузки Пост.{i+1}: {int(round(np.sum(plan[i])))} / запас {int(supply_[i])}")
+            for j in range(n_c):
+                self.log(f"  Поставки П{j+1}: {int(round(np.sum(plan[:, j])))} / спрос {int(demand_[j])}")
+
+            self.after(0, lambda: self._draw_chart(plan))
+            self.after(0, self._finish_solve)
+
+        threading.Thread(target=run, daemon=True).start()
+
+    def _finish_solve(self):
+        self.solve_btn.configure(text="Решить задачу", state="normal")
+        self._start_pulse()
+
+    # ─── Pulse-анимация кнопки ───
+    def _start_pulse(self):
+        if self._pulse_id:
+            self.after_cancel(self._pulse_id)
+        self._pulse_state = False
+        self._pulse_step(0)
+
+    def _pulse_step(self, step):
+        if step > 6:
+            self.solve_btn.configure(fg_color=ACCENT)
             return
+        # между ACCENT и ACCENT_HOV
+        t = step / 6.0
+        c1 = (99, 102, 241); c2 = (79, 70, 229)
+        col = tuple(int(c1[i] + (c2[i] - c1[i]) * t) for i in range(3))
+        hex_col = "#%02X%02X%02X" % col
+        self.solve_btn.configure(fg_color=hex_col)
+        self._pulse_id = self.after(70, lambda: self._pulse_step(step + 1))
 
-        x_opt, z_opt = result
-        plan = x_opt.reshape((n_s, n_c))
-
-        # Вывод итоговой таблицы
-        self.log("")
-        self.log("╔══════════════════════════════════════════════════════════╗", "header")
-        self.log("║              ОПТИМАЛЬНЫЙ ПЛАН ПОСТАВОК                   ║", "header")
-        self.log("╚══════════════════════════════════════════════════════════╝", "header")
-        self.log(f"Минимальные суммарные затраты: z* = {z_opt:.2f} руб.", "success")
-        self.log("")
-
-        header = "          " + "".join(f"{'Потр.'+str(j+1):>9}" for j in range(n_c))
-        self.log(header, "info")
-        for i in range(n_s):
-            line = f"Пост.{i+1:<3} " + "".join(f"{int(round(plan[i][j])):>9}"
-                                                 for j in range(n_c))
-            self.log(line)
-
-        self.log("")
-        self.log("Проверка ограничений:", "info")
-        for i in range(n_s):
-            self.log(f"  Отгрузки с Пост.{i+1}: {int(round(np.sum(plan[i])))} / запас {int(supply[i])}")
-        for j in range(n_c):
-            self.log(f"  Поставки в Потр.{j+1}: {int(round(np.sum(plan[:, j])))} / спрос {int(demand[j])}")
-
-        self.draw_chart(plan)
-
-    # ---------- График ----------
-    def draw_chart(self, plan):
+    # ─── График ───
+    def _draw_chart(self, plan):
         if self.canvas:
             self.canvas.get_tk_widget().destroy()
             self.canvas = None
 
         n_s, n_c = plan.shape
-        fig = Figure(figsize=(6, 3.2), dpi=90, facecolor="#f0f0f0")
+        fig = Figure(figsize=(6.5, 3.5), dpi=100, facecolor=CARD)
         ax = fig.add_subplot(111)
-        im = ax.imshow(plan, cmap="Blues", aspect="auto")
+        ax.set_facecolor(CARD)
+
+        vmax = plan.max() if plan.max() > 0 else 1
+        im = ax.imshow(plan, cmap="Blues", aspect="auto", vmin=0, vmax=vmax)
 
         ax.set_xticks(range(n_c))
-        ax.set_xticklabels([f"Потр.{j+1}" for j in range(n_c)])
+        ax.set_xticklabels([f"Потр.{j+1}" for j in range(n_c)], color=TEXT)
         ax.set_yticks(range(n_s))
-        ax.set_yticklabels([f"Пост.{i+1}" for i in range(n_s)])
-        ax.set_title("Карта оптимальных поставок", fontsize=11)
+        ax.set_yticklabels([f"Пост.{i+1}" for i in range(n_s)], color=TEXT)
 
+        ax.set_title("Карта оптимальных поставок", color=TEXT, fontsize=11, pad=10)
+        for spine in ax.spines.values():
+            spine.set_color(BORDER)
+
+        threshold = vmax * 0.5
         for i in range(n_s):
             for j in range(n_c):
                 val = int(round(plan[i][j]))
-                color = "white" if val > plan.max() * 0.5 else "black"
+                color = "white" if val > threshold else TEXT
                 ax.text(j, i, str(val), ha="center", va="center",
-                        color=color, fontsize=10, fontweight="bold")
+                        color=color, fontsize=11, fontweight="bold")
 
-        fig.colorbar(im, ax=ax, label="Объём поставки")
+        cb = fig.colorbar(im, ax=ax)
+        cb.set_label("Объём поставки", color=MUTED)
+        cb.ax.tick_params(colors=MUTED)
         fig.tight_layout()
 
         self.canvas = FigureCanvasTkAgg(fig, master=self.chart_frame)
@@ -540,7 +600,7 @@ class LogisticsApp:
         self.canvas.get_tk_widget().pack(fill="both", expand=True)
 
 
+# ═══════════════════════════════════════════════════════════
 if __name__ == "__main__":
-    root = tk.Tk()
-    app = LogisticsApp(root)
-    root.mainloop()
+    app = LogisticsApp()
+    app.mainloop()
